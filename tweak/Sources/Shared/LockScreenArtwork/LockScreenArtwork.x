@@ -20,6 +20,7 @@ static NSMutableDictionary<NSString *, NSURL *> *sg_canvasFiles;
 // A media artwork has to outlive nowPlayingInfo, so retain every one still associated with a cached file.
 static NSMutableDictionary<NSString *, id> *sg_artworks;
 static NSMutableSet<NSString *> *sg_downloading;
+static NSMutableSet<NSString *> *sg_processing;
 static BOOL sg_writingNowPlaying;
 
 static NSURLRequest *requestOf(NSURLSessionTask *task) {
@@ -94,7 +95,9 @@ static NSString *fileName(NSString *track, NSURL *remote) {
     NSString *trackID = [track componentsSeparatedByString:@":"].lastObject ?: @"canvas";
     NSString *extension = remote.pathExtension.lowercaseString;
     if (![@[@"mp4", @"mov", @"m4v"] containsObject:extension]) extension = @"mp4";
-    return [NSString stringWithFormat:@"%@-%08lx.%@", trackID, (unsigned long)remote.absoluteString.hash, extension];
+    // `source` prevents a Canvas cached by the first implementation (which passed 9:16 through)
+    // being mistaken for the normalized asset below after an update.
+    return [NSString stringWithFormat:@"%@-%08lx-source.%@", trackID, (unsigned long)remote.absoluteString.hash, extension];
 }
 
 // Keep the cache bounded without removing the Canvas that was just attached to now playing.
@@ -120,6 +123,120 @@ static void trimCache(NSURL *keeping) {
 static UIImage *previewForFile(NSURL *file, CGSize size) API_AVAILABLE(ios(19.0));
 static MPMediaItemAnimatedArtwork *artworkForFile(NSString *track, NSURL *file) API_AVAILABLE(ios(19.0));
 static NSDictionary *withCanvasArtwork(NSDictionary *info) API_AVAILABLE(ios(19.0));
+static void keepCanvas(NSString *track, NSURL *file);
+
+static AVAssetTrack *videoTrackForAsset(AVAsset *asset) {
+    return [[asset tracksWithMediaType:AVMediaTypeVideo] firstObject];
+}
+
+// The preferred transform turns a portrait H.264 asset into the dimensions people see.  Use its
+// bounding rectangle rather than naturalSize, which is commonly landscape before rotation metadata
+// is applied.
+static CGSize displayedSize(AVAssetTrack *video) {
+    CGRect rect = CGRectApplyAffineTransform((CGRect){ .size = video.naturalSize }, video.preferredTransform);
+    return CGSizeMake(fabs(rect.size.width), fabs(rect.size.height));
+}
+
+static CGFloat aspectOf(AVAssetTrack *video) {
+    CGSize size = displayedSize(video);
+    return size.height > 0 ? size.width / size.height : 0;
+}
+
+static BOOL hasAspect(CGFloat actual, CGFloat expected) {
+    return actual > 0 && fabs(actual - expected) < 0.01;
+}
+
+static BOOL isTallVideoFile(NSURL *file) {
+    if (![NSFileManager.defaultManager fileExistsAtPath:file.path]) return NO;
+    AVAssetTrack *video = videoTrackForAsset([AVURLAsset URLAssetWithURL:file options:nil]);
+    return video && hasAspect(aspectOf(video), 3.0 / 4.0);
+}
+
+static NSURL *tallFileForSource(NSURL *source) {
+    NSString *name = [[source.lastPathComponent stringByDeletingPathExtension] stringByAppendingString:@"-tall.mp4"];
+    return [source.URLByDeletingLastPathComponent URLByAppendingPathComponent:name];
+}
+
+// The Canvas contract is 9:16, whereas the only portrait animated-artwork slot that iOS offers is
+// 3:4.  Cover and crop the 9:16 image into a 720x960 local MP4.  The preview below reads that very
+// same file, so both assets obey the 3:4 contract and the system cannot reject them for a mismatch.
+static CGAffineTransform transformToFill(AVAssetTrack *video, CGSize renderSize) {
+    CGRect rect = CGRectApplyAffineTransform((CGRect){ .size = video.naturalSize }, video.preferredTransform);
+    CGSize sourceSize = CGSizeMake(fabs(rect.size.width), fabs(rect.size.height));
+    CGFloat scale = MAX(renderSize.width / sourceSize.width, renderSize.height / sourceSize.height);
+    CGAffineTransform transform = video.preferredTransform;
+    // First move the transformed source into a (0, 0) coordinate space, then scale and centre it.
+    // Concatenating on the right applies each operation after the source's preferred transform.  The
+    // convenience Translate/Scale functions do the inverse for a rotated transform, which shifts a
+    // portrait Canvas sideways instead of moving it in the rendered 3:4 frame.
+    transform = CGAffineTransformConcat(transform, CGAffineTransformMakeTranslation(-rect.origin.x, -rect.origin.y));
+    transform = CGAffineTransformConcat(transform, CGAffineTransformMakeScale(scale, scale));
+    CGFloat width = sourceSize.width * scale, height = sourceSize.height * scale;
+    return CGAffineTransformConcat(transform, CGAffineTransformMakeTranslation((renderSize.width - width) / 2, (renderSize.height - height) / 2));
+}
+
+static void normalizeCanvas(NSString *track, NSURL *source, AVAsset *asset, AVAssetTrack *video) {
+    NSURL *destination = tallFileForSource(source);
+    if (isTallVideoFile(destination)) {
+        keepCanvas(track, destination);
+        return;
+    }
+    // An interrupted export can leave a zero-byte or incomplete file behind; never let that poison
+    // the cache and make every following playback of the track fall back to its static cover.
+    [NSFileManager.defaultManager removeItemAtURL:destination error:nil];
+    NSString *key = source.path;
+    @synchronized (sg_lock) {
+        if ([sg_processing containsObject:key]) return;
+        [sg_processing addObject:key];
+    }
+    AVAssetExportSession *export = [[AVAssetExportSession alloc] initWithAsset:asset presetName:AVAssetExportPresetHighestQuality];
+    if (!export || ![export.supportedFileTypes containsObject:AVFileTypeMPEG4]) {
+        @synchronized (sg_lock) { [sg_processing removeObject:key]; }
+        SGLog(@"lock screen Canvas: cannot export %@ as MP4", source.lastPathComponent);
+        return;
+    }
+    CGSize renderSize = CGSizeMake(720, 960);
+    AVMutableVideoComposition *composition = [AVMutableVideoComposition videoComposition];
+    composition.renderSize = renderSize;
+    float rate = video.nominalFrameRate;
+    composition.frameDuration = CMTimeMake(1, rate > 0 ? MIN(MAX((int32_t)lroundf(rate), 1), 60) : 30);
+    AVMutableVideoCompositionInstruction *instruction = [AVMutableVideoCompositionInstruction videoCompositionInstruction];
+    instruction.timeRange = CMTimeRangeMake(kCMTimeZero, asset.duration);
+    AVMutableVideoCompositionLayerInstruction *layer = [AVMutableVideoCompositionLayerInstruction videoCompositionLayerInstructionWithAssetTrack:video];
+    [layer setTransform:transformToFill(video, renderSize) atTime:kCMTimeZero];
+    instruction.layerInstructions = @[layer];
+    composition.instructions = @[instruction];
+    export.outputURL = destination;
+    export.outputFileType = AVFileTypeMPEG4;
+    export.videoComposition = composition;
+    export.shouldOptimizeForNetworkUse = YES;
+    [export exportAsynchronouslyWithCompletionHandler:^{
+        @synchronized (sg_lock) { [sg_processing removeObject:key]; }
+        if (export.status != AVAssetExportSessionStatusCompleted) {
+            SGLog(@"lock screen Canvas: 9:16 to 3:4 export failed for %@: %@", track, export.error);
+            [NSFileManager.defaultManager removeItemAtURL:destination error:nil];
+            return;
+        }
+        // The rendered MP4 is now the asset held by Now Playing; the 9:16 input is no longer needed.
+        [NSFileManager.defaultManager removeItemAtURL:source error:nil];
+        keepCanvas(track, destination);
+    }];
+}
+
+static void prepareCanvas(NSString *track, NSURL *source) {
+    AVURLAsset *asset = [AVURLAsset URLAssetWithURL:source options:nil];
+    AVAssetTrack *video = videoTrackForAsset(asset);
+    if (!video) {
+        SGLog(@"lock screen Canvas: %@ has no video track", source.lastPathComponent);
+        return;
+    }
+    CGFloat aspect = aspectOf(video);
+    if (hasAspect(aspect, 1) || hasAspect(aspect, 3.0 / 4.0)) {
+        keepCanvas(track, source);
+        return;
+    }
+    normalizeCanvas(track, source, asset, video);
+}
 
 static void refreshNowPlayingForTrack(NSString *track) {
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -155,7 +272,7 @@ static void downloadCanvas(NSString *track, NSURL *remote) {
     }
     if ([NSFileManager.defaultManager fileExistsAtPath:destination.path]) {
         @synchronized (sg_lock) { [sg_downloading removeObject:key]; }
-        keepCanvas(track, destination);
+        prepareCanvas(track, destination);
         return;
     }
     [[NSURLSession.sharedSession downloadTaskWithURL:remote completionHandler:^(NSURL *temporary, NSURLResponse *response, NSError *error) {
@@ -172,7 +289,7 @@ static void downloadCanvas(NSString *track, NSURL *remote) {
             SGLog(@"lock screen Canvas: could not save %@: %@", track, moveError);
             return;
         }
-        keepCanvas(track, destination);
+        prepareCanvas(track, destination);
     }] resume];
 }
 
@@ -240,14 +357,13 @@ static UIImage *previewForFile(NSURL *file, CGSize size) {
 static NSString *artworkKeyForFile(NSURL *file) API_AVAILABLE(ios(19.0));
 static NSString *artworkKeyForFile(NSURL *file) {
     AVURLAsset *asset = [AVURLAsset URLAssetWithURL:file options:nil];
-    AVAssetTrack *video = [[asset tracksWithMediaType:AVMediaTypeVideo] firstObject];
+    AVAssetTrack *video = videoTrackForAsset(asset);
     if (!video) return nil;
-    CGRect rect = CGRectApplyAffineTransform((CGRect){ .size = video.naturalSize }, video.preferredTransform);
-    CGFloat width = fabs(rect.size.width), height = fabs(rect.size.height);
-    CGFloat aspect = height ? width / height : 0;
-    // Spotify Canvas is normally portrait.  The system's tall slot is the closest supported one;
-    // square Canvas uses the square slot so it is not stretched by the lock screen.
-    return aspect > 0.88 && aspect < 1.12 ? MPNowPlayingInfoProperty1x1AnimatedArtwork : MPNowPlayingInfoProperty3x4AnimatedArtwork;
+    CGFloat aspect = aspectOf(video);
+    if (hasAspect(aspect, 1)) return MPNowPlayingInfoProperty1x1AnimatedArtwork;
+    if (hasAspect(aspect, 3.0 / 4.0)) return MPNowPlayingInfoProperty3x4AnimatedArtwork;
+    SGLog(@"lock screen Canvas: refusing unsupported %.3f aspect for %@", aspect, file.lastPathComponent);
+    return nil;
 }
 
 static MPMediaItemAnimatedArtwork *artworkForFile(NSString *track, NSURL *file) {
@@ -332,6 +448,7 @@ static NSDictionary *withCanvasArtwork(NSDictionary *info) {
     sg_canvasFiles = [NSMutableDictionary dictionary];
     sg_artworks = [NSMutableDictionary dictionary];
     sg_downloading = [NSMutableSet set];
+    sg_processing = [NSMutableSet set];
     %init(LockScreenCanvasHooks);
     SGRequireClasses(@[@"SPTDataLoaderService", @"_TtC26Connectivity_HttpClientKit20HttpClientURLSession", @"MPNowPlayingInfoCenter"]);
     SGLog(@"lock screen Canvas: on");
