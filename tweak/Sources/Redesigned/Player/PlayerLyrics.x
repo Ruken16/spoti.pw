@@ -453,8 +453,8 @@ static void replace(void) {
     NSString *track = SGURIString(state.track.URI);
     if (!track || [track isEqualToString:_track]) return;
     _track = track;
-    // Lyrics arrive a moment after the track does, and nothing announces them: the glyph is asked again
-    // while they would be coming, and the lines already up wait out the same grace before they go.
+    // The early check covers a response Spotify already had in flight.  A source which finishes later
+    // sends SGKaraokeLyricsDidChangeNotification; the grace still puts a previous song's view away.
     for (NSNumber *delay in @[@1, @(kLyricsGrace)]) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             SGRPlayerLyricsChanged();
@@ -479,6 +479,13 @@ static SGRPlayerLyricsWatcher *sg_watcher;
         if (!sg_open) return;
         SGRPlayerLyricsOverlay *overlay = objc_getAssociatedObject(sg_host, &kOverlayKey);
         overlay.cover.image = SGRNowPlayingArtwork(NULL, NULL);
+    }];
+    [NSNotificationCenter.defaultCenter addObserverForName:SGKaraokeLyricsDidChangeNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
+        NSString *changedTrack = [note.object isKindOfClass:NSString.class] ? note.object : nil;
+        if (![changedTrack isEqualToString:SGKaraokePlayingTrack()]) return;
+        // Remote sources often resolve after the old three-second grace.  Refresh the footer at the
+        // instant lines are kept so its Lyrics control never stays disabled for an otherwise valid song.
+        SGRPlayerLyricsChanged();
     }];
     SGRequireClasses(@[
         @"_TtC19NowPlaying_ViewImpl24NowPlayingViewController",

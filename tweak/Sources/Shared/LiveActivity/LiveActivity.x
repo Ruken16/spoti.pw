@@ -266,6 +266,9 @@ void SGSetLiveActivityEnabled(BOOL on) {
             SGLog(@"live activity: off");
             return;
         }
+        // The switch may be enabled while Spotify is already running.  Start the shared player
+        // observer now as well as at launch; otherwise there is no state for the activity to render.
+        SGKaraokeStartIfNeeded();
         static dispatch_once_t observing;
         dispatch_once(&observing, ^{
             NSNotificationCenter *center = NSNotificationCenter.defaultCenter;

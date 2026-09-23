@@ -6,6 +6,7 @@
 // hands the lines over.
 #import "Core/SGCore.h"
 #import "Lyrics.h"
+#import "Shared/LiveActivity/LiveActivity.h"
 #import "Shared/LockScreenLyrics/LockScreenLyrics.h"
 #import "Shared/LyricsSources/LyricsSources.h"
 #import "Headers/SPTPlayer.h"
@@ -21,6 +22,7 @@ static NSMutableDictionary<NSString *, NSArray<SGKaraokeLine *> *> *sg_lyrics;
 static NSMutableSet<NSString *> *sg_requested;
 static NSDictionary<NSString *, NSString *> *sg_spclientHeaders;
 static __weak id sg_player;
+NSNotificationName const SGKaraokeLyricsDidChangeNotification = @"spotifyglass.karaokeLyricsDidChange";
 // Every track the player has reported, by id, so a source can name a track that is not the one
 // playing at the moment it is asked: a lyrics request routinely lands a beat before the player
 // moves on to its track. The last object seen is kept by pointer so the check on each call is free,
@@ -70,6 +72,7 @@ static void keep(NSString *track, NSArray<SGKaraokeLine *> *lines) {
         }
     }
     sg_lyrics[track] = lines;
+    [NSNotificationCenter.defaultCenter postNotificationName:SGKaraokeLyricsDidChangeNotification object:track];
 }
 
 void SGKaraokeKeepLines(NSString *track, NSArray<SGKaraokeLine *> *lines) {
@@ -245,6 +248,7 @@ static void prefetch(SPTPlayerTrack *track, NSString *trackID, SPTPlayerState *s
     SGLyricsPrefetch(nextID);
 }
 
+%group KaraokeHooks
 %hook SPTEsperantoPlayer
 - (id)state {
     if (!sg_player) sg_player = self;
@@ -285,18 +289,33 @@ static void prefetch(SPTPlayerTrack *track, NSString *trackID, SPTPlayerState *s
 }
 %end
 
-%ctor {
+%end
+
+static void start(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        sg_seenTracks = [NSMutableDictionary dictionary];
+        sg_lyrics = [NSMutableDictionary dictionary];
+        sg_requested = [NSMutableSet set];
+        sg_ownSources = SGLyricsEnabled();
+        %init(KaraokeHooks);
+        SGLog(@"karaoke: on");
+        SGRequireClasses(@[
+            @"SPTEsperantoPlayer", @"SPTPlayerState",
+            @"SPTDataLoaderService", @"_TtC26Connectivity_HttpClientKit20HttpClientURLSession",
+        ]);
+    });
+}
+
+void SGKaraokeStartIfNeeded(void) {
     // The sources that search by name learn the name from the player, so the player is caught
-    // whenever one is on, not only for the redesign's lyrics and the lock screen.
-    if (!SGRedesignedUI() && !SGFlag(SGKeyLockScreenLyrics, NO) && !SGLyricsEnabled()) return;
-    sg_seenTracks = [NSMutableDictionary dictionary];
-    sg_lyrics = [NSMutableDictionary dictionary];
-    sg_requested = [NSMutableSet set];
-    sg_ownSources = SGLyricsEnabled();
-    %init;
-    SGLog(@"karaoke: on");
-    SGRequireClasses(@[
-        @"SPTEsperantoPlayer", @"SPTPlayerState",
-        @"SPTDataLoaderService", @"_TtC26Connectivity_HttpClientKit20HttpClientURLSession",
-    ]);
+    // whenever one is on.  The Live Activity needs the exact same player state even when neither
+    // the redesign nor lock-screen lyrics are enabled; without it, its timer had no track to show.
+    if (!SGRedesignedUI() && !SGFlag(SGKeyLockScreenLyrics, NO)
+            && !SGFlag(SGKeyLiveActivity, NO) && !SGLyricsEnabled()) return;
+    start();
+}
+
+%ctor {
+    SGKaraokeStartIfNeeded();
 }

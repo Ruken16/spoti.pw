@@ -95,6 +95,9 @@ SGKaraokeTiming SGKaraokeLinesTiming(NSArray<SGKaraokeLine *> *lines);
 
 NSArray<SGKaraokeLine *> *SGKaraokeLinesForTrack(NSString *trackID);   // nil until the lyrics came
 void SGKaraokeKeepLines(NSString *trackID, NSArray<SGKaraokeLine *> *lines);
+// Posted on the main queue after a track gains or replaces its lines.  The player footer uses this
+// instead of assuming the network has answered within a fixed number of seconds.
+extern NSNotificationName const SGKaraokeLyricsDidChangeNotification;
 // Asks spclient for a track's lyrics once, with the headers of Spotify's own requests, for when no
 // page of Spotify's has asked for them, e.g. with the app in the background.
 void SGKaraokeRequestLyrics(NSString *trackID);
@@ -109,6 +112,9 @@ NSString *SGKaraokePlayingTrack(void);   // the base62 id, nil before the player
 NSInteger SGKaraokePositionMs(void);     // negative when unknown
 void SGKaraokeSeek(NSInteger ms);
 id SGKaraokePlayer(void);                // SPTEsperantoPlayer, nil before the app asked it for its state
+// Installs the player and lyrics observers when one of their consumers is enabled.  Live Activity
+// calls this after its switch is flipped, so it need not wait for the next app launch.
+void SGKaraokeStartIfNeeded(void);
 // A track the player has reported, by its base62 id; nil for one it has not played this session.
 @class SPTPlayerTrack;
 SPTPlayerTrack *SGKaraokeTrackFor(NSString *trackID);
