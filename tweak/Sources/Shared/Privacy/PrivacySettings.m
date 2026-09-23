@@ -1,5 +1,6 @@
 #import "Settings/SGModPage.h"
 #import "Privacy.h"
+#import "Shared/AdBlock/AdBlock.h"
 
 // Every switch here forces a flag Spotify ships on to off, so the titles name the hiding: on hides
 // the thing, off is Spotify's own value.
@@ -36,9 +37,26 @@ static SGModSection *countersSection(void) {
     return SGSection(@"Telemetry blocked so far", counts);
 }
 
+static SGModSection *adCountersSection(void) {
+    NSMutableArray<SGModRow *> *counts = [NSMutableArray array];
+    for (NSString *label in SGAdBlockLabels()) {
+        [counts addObject:SGStatRow(label, ^NSString *{
+            return @(SGAdBlockCount(label)).stringValue;
+        })];
+    }
+    [counts addObject:SGStatRow(@"Total", ^NSString *{
+        return @(SGAdBlockCount(nil)).stringValue;
+    })];
+    [counts addObject:SGActionRow(@"Reset the ad counters", nil, ^{ SGResetAdBlock(); })];
+    return SGSection(@"Ads blocked so far", counts);
+}
+
 // The switches first and what they have stopped last, so the counters bury no setting.
 UIViewController *SGPrivacySettingsPage(void) {
     return [[SGModPage alloc] initWithTitle:@"Privacy & clutter" intro:SGRestartNote sections:@[
+        SGSection(@"Ads", @[
+            SGWithSymbol(SGSwitchRow(@"Block ads", @"Blocks ad services, sponsored cards and ad requests without changing your account plan", SGKeyBlockAds), @"speaker.slash"),
+        ]),
         SGSection(@"Privacy", @[
             SGWithSymbol(SGSwitchRow(@"Block telemetry", @"Spotify's own events still go out, since Recents is built from them", SGKeyBlockTelemetry), @"antenna.radiowaves.left.and.right.slash"),
         ]),
@@ -47,6 +65,7 @@ UIViewController *SGPrivacySettingsPage(void) {
             SGWithSymbol(SGOptionRow(@"Hide social proof in Search", nil, SGKeyHideSocialProof), @"person.2"),
             SGWithSymbol(SGPageRow(@"Tips", ^UIViewController *{ return tipsPage(); }), @"lightbulb"),
         ]),
+        adCountersSection(),
         countersSection(),
     ] footer:nil];
 }

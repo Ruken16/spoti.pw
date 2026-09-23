@@ -46,6 +46,10 @@ The redesign is `UIGlassEffect`, which only exists from iOS 26. Below that the R
 is greyed out and the mod runs Spotify's own screens with everything else it adds on top. Both live
 in Settings → Mod Settings.
 
+Ad blocking is on by default. It suppresses Spotify's ad services, sponsored cards, ad requests and
+client-side ad playback, without changing your account plan or enabling Premium-only features. It can be switched off in
+**Mod Settings → Privacy & clutter**; restart Spotify after changing it.
+
 ## Build it
 
 No IPA is distributed. Bring a decrypted **Spotify 9.1.78** IPA; you get an unsigned

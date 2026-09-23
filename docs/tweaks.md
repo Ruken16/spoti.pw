@@ -71,6 +71,10 @@ A feature is a directory in its layer holding everything about one area of the a
 
 Shared:
 
+    AdBlock/      the ad-only parts of the EeveeSpotify approach: ad services do not start, sponsored
+                  Hub JSON and protobuf feed sections are removed before they render, ad endpoints are
+                  answered empty, the client-side ad player is disabled, and relevant remote-config flags
+                  are forced off. It does not alter account state, emulate Premium or unlock paid features.
     Privacy/      telemetry blocking and its counters, and the Search switches that force their flags off (Clutter.m)
     ArtistBlock/  tracks by blocked artists skipped as they start (ArtistSkip.x), the list and the Blocked artists page under Player
     Flags/        Spotify's remote-config flags: the provider hook, the generated table, the All flags page and the Labs page
@@ -265,7 +269,7 @@ changes; the row reads out Off, On or how many effects are on. Home & Library, i
 the Gradient page (the wash behind the top of Home in one of eight colours, at three strengths and
 four heights) and the Home flags, the parts of Home to hide including the DJ button and badge, the
 playlist header, buttons and pills to hide, and the Library flags. Then Privacy & clutter
-(Block telemetry; hiding the video carousel and social proof in Search, and a Tips page under them,
+(Block ads, with its counters; Block telemetry; hiding the video carousel and social proof in Search, and a Tips page under them,
 every switch there forcing a flag Spotify ships on to off; then what the telemetry blocking has stopped) and Labs (features Spotify built and did not ship,
 AI Chat (Martini) first). Last, All flags, Spotify's remote-config flags with a search field and an
 Auto / Off / On control per flag (a text field for the number and text ones), and Mod: Updates
