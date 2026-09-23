@@ -41,6 +41,7 @@ which change between releases, so another version may build and then break.
 | The redesign | **iOS 26+** |
 | Legacy look | iOS 16.1+ |
 | Live Activity | iOS 17+ |
+| Animated Canvas on the Lock Screen | iOS 26+ |
 
 The redesign is `UIGlassEffect`, which only exists from iOS 26. Below that the Redesigned UI switch
 is greyed out and the mod runs Spotify's own screens with everything else it adds on top. Both live
@@ -49,6 +50,10 @@ in Settings → Mod Settings.
 Ad blocking is on by default. It suppresses Spotify's ad services, sponsored cards, ad requests and
 client-side ad playback, without changing your account plan or enabling Premium-only features. It can be switched off in
 **Mod Settings → Privacy & clutter**; restart Spotify after changing it.
+
+On iOS 26 and later, **Canvas on the Lock Screen** plays the Canvas Spotify provides for the current
+track as animated now-playing artwork. It is on by default under **Mod Settings → Player → Lock screen
+widget**. Tracks without a Spotify Canvas keep their ordinary static cover.
 
 ## Build it
 

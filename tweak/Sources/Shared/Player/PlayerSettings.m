@@ -1,6 +1,7 @@
 // The player's settings that do not depend on the look: the lock screen widget's flags.
 #import "Core/SGCore.h"
 #import "Settings/SGModPage.h"
+#import "Shared/LockScreenArtwork/LockScreenArtwork.h"
 #import "PlayerSettings.h"
 
 UIViewController *SGLockScreenWidgetPage(void) {
@@ -12,6 +13,7 @@ UIViewController *SGLockScreenWidgetPage(void) {
             SGFlagRow(@"Burst skip", @"ios-feature-lockscreen.burst_skip_enabled"),
         ]),
         SGSection(@"Artwork", @[
+            SGSwitchRow(@"Canvas on the Lock Screen", @"Play Spotify Canvas as animated artwork (iOS 26+)", SGKeyLockScreenCanvas),
             SGFlagRow(@"Animated artwork", @"ios-feature-lockscreen.animated_artwork_enabled"),
             SGFlagRow(@"Video artwork", @"ios-feature-lockscreen.vit_artwork_enabled"),
             SGFlagRow(@"Companion content", @"ios-feature-lockscreen.companion_content_enabled"),
